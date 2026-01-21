@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaTeX OCR - Results</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js"></script>
+    <style>
+        body { background: #0b0f19; min-height: 100vh; padding: 40px 20px; position: relative; overflow-x: hidden; }
+        #stars { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; background-color: #0b0f19; }
+        .star { position: absolute; color: rgba(255, 255, 255, 0.85); }
+        #floatingFormulas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+        .floating-formula { position: absolute; color: rgba(200, 220, 255, 0.55); font-size: 18px; pointer-events: none; max-width: 300px; }
+        @keyframes float1 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        @keyframes float2 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-15px); }
+        }
+        @keyframes float3 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-25px); }
+        }
+        @keyframes float4 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-18px); }
+        }
+        .main-container { max-width: 1400px; margin: 0 auto; position: relative; z-index: 2; }
+        .result-card { border: 2px solid rgba(255,255,255,0.3); border-radius: 15px; overflow: hidden; transition: transform 0.2s, box-shadow 0.2s; background: rgba(255,255,255,0.95); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .result-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.15); }
+        .card-image { padding: 15px; background: #f5f5f5; text-align: center; min-height: 150px; display: flex; align-items: center; justify-content: center; }
+        .card-image img { max-width: 100%; max-height: 200px; border: 1px solid #ddd; border-radius: 5px; }
+        .latex-code { background: #f8f9ff; border: 1px solid #667eea; border-radius: 5px; padding: 15px; font-family: 'Courier New', monospace; font-size: 14px; color: #d32f2f; margin: 10px 0; word-wrap: break-word; max-height: 150px; overflow-y: auto; }
+        .latex-rendered { background: white; border: 1px solid #e0e0e0; border-radius: 5px; padding: 20px; margin: 10px 0; text-align: center; font-size: 18px; min-height: 60px; display: flex; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body>
+    <div id="stars"></div>
+    <div id="floatingFormulas"></div>
+    
+    <div class="container main-container">
+        <h1 class="text-center mb-2 text-white">Extraction results</h1>
+        <p class="text-center text-white mb-4" style="opacity: 0.9;">Your LaTeX formulas have been extracted</p>
+        
+        <div class="d-flex justify-content-center gap-2 flex-wrap mb-4">
+            <a href="/" class="btn btn-primary">Upload new file</a>
+            <button class="btn btn-secondary" onclick="exportResults()">Export all</button>
+        </div>
+        
+        <div class="row g-4" id="resultsGrid"></div>
+        
+        <div class="text-center my-5" id="noResults" style="display: none;">
+            <h2 class="text-white">No results found</h2>
+            <p class="text-white" style="opacity: 0.9;">Please go back and select some boxes to extract formulas</p>
+            <a href="/" class="btn btn-primary mt-3">Go back</a>
+        </div>
+    </div>
+
+    <script>
+        // this page reads extraction payloads from sessionStorage set by the index page and renders both the raw latex strings and mathjax output
+        // the backend is not called here
+        // the region coordinates received from the api are used to crop the original page bitmap for preview
+        const resultsData = sessionStorage.getItem('extractionResults');
+        const originalImage = sessionStorage.getItem('originalImage');
+        
+        if (!resultsData) {
+            document.getElementById('noResults').style.display = 'block';
+        } else {
+            const data = JSON.parse(resultsData);
+            displayResults(data);
+        }
+        
+        function displayResults(data) {
+            const results = data.results || [];
+            
+            // display result cards for each box, including cropped preview and latex output
+            const grid = document.getElementById('resultsGrid');
+            grid.innerHTML = '';
+            
+            results.forEach((result, index) => {
+                const card = createResultCard(result, index);
+                grid.appendChild(card);
+            });
+            
+            if (window.MathJax) {
+                MathJax.typesetPromise(); // render mathjax after all cards are added so formulas are typeset properly
+            }
+        }
+        
+        function createResultCard(result, index) {
+            const col = document.createElement('div');
+            col.className = 'col-lg-6';
+            
+            const pageInfo = result.page ? ` <span class="badge bg-secondary">Page ${result.page}</span>` : '';
+            const hasError = result.error || !result.latex;
+            
+            let pageImage = originalImage; // get the correct page image if multi-page data is available so the crop aligns with the page number
+            const allPagesData = sessionStorage.getItem('allPagesData');
+            if (allPagesData && result.page) {
+                const pages = JSON.parse(allPagesData);
+                const pageData = pages.find(p => p.pageNum === result.page);
+                if (pageData) {
+                    pageImage = pageData.imageData;
+                }
+            }
+            
+            let croppedImageHTML = '';
+            if (pageImage && result.region) {
+                const croppedImg = cropImage(pageImage, result.region);
+                croppedImageHTML = `
+                    <div class="card-image">
+                        <img src="${croppedImg}" alt="Cropped formula region" class="img-fluid">
+                    </div>
+                `;
+            }
+            
+            let contentHTML = '';
+            if (hasError) {
+                contentHTML = `
+                    <div class="card-body">
+                        <div class="alert alert-warning">
+                            <strong>Note:</strong> ${result.error || 'Could not extract LaTeX from this region'}
+                        </div>
+                    </div>
+                `;
+            } else {
+                const latexCode = result.latex;
+                contentHTML = `
+                    <div class="card-body">
+                        <h5>LaTeX Code:</h5>
+                        <div class="latex-code" id="latex-${index}">${escapeHtml(latexCode)}</div>
+                        <button class="btn btn-primary btn-sm mt-2" onclick="copyToClipboard('latex-${index}', this)">
+                            Copy LaTeX
+                        </button>
+                        
+                        <h5 class="mt-3">Rendered Formula:</h5>
+                        <div class="latex-rendered">
+                            \\[${latexCode}\\]
+                        </div>
+                    </div>
+                `;
+            }
+            
+            col.innerHTML = `
+                <div class="card result-card mb-3">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between">
+                        <span>Box #${index + 1}${pageInfo}</span>
+                    </div>
+                    ${croppedImageHTML}
+                    ${contentHTML}
+                </div>
+            `;
+            
+            return col;
+        }
+        
+        function cropImage(imageDataUrl, region) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            
+            // create a synchronous crop using the browser canvas api
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            img.src = imageDataUrl;
+            
+            canvas.width = region.width;
+            canvas.height = region.height;
+            
+            // wait for image load (cached dataurls usually resolve immediately) before drawing the crop
+            if (img.complete) {
+                ctx.drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+            } else {
+                // return a tiny placeholder if the image has not loaded, the card will update once loaded
+                return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+            }
+            
+            return canvas.toDataURL();
+        }
+        
+        function copyToClipboard(elementId, button) {
+            const element = document.getElementById(elementId);
+            const text = element.textContent;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = button.textContent;
+                button.textContent = 'Copied';
+                button.classList.remove('btn-primary');
+                button.classList.add('btn-success');
+                
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('btn-success');
+                    button.classList.add('btn-primary');
+                }, 2000);
+            }).catch(err => {
+                alert('Failed to copy: ' + err);
+            });
+        }
+        
+        function exportResults() {
+            const resultsData = sessionStorage.getItem('extractionResults');
+            if (!resultsData) return;
+            
+            const data = JSON.parse(resultsData);
+            const results = data.results || [];
+            
+            let exportText = 'LaTeX OCR Extraction Results\n\n';
+            exportText += `Total Boxes: ${data.total_boxes}\n`;
+            exportText += `Extraction Date: ${new Date().toLocaleString()}\n\n`;
+            
+            results.forEach((result, index) => {
+                exportText += `Box #${index + 1}${result.page ? ` (Page ${result.page})` : ''}:\n`;
+                if (result.latex) {
+                    exportText += `LaTeX: ${result.latex}\n`;
+                } else if (result.error) {
+                    exportText += `Error: ${result.error}\n`;
+                } else {
+                    exportText += `LaTeX: (empty)\n`;
+                }
+                exportText += `Region: (${result.region.x}, ${result.region.y}) - ${result.region.width}×${result.region.height}px\n`;
+            });
+            
+            const blob = new Blob([exportText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `latex-extraction-${Date.now()}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function createStarField() { // generate starfield using bootstrap icons
+            const starsContainer = document.getElementById('stars');
+            if (!starsContainer) return;
+            starsContainer.innerHTML = '';
+            const totalStars = 70;
+            for (let i = 0; i < totalStars; i++) {
+                const star = document.createElement('i');
+                star.className = 'bi bi-star-fill star';
+                const size = 4 + Math.random() * 6; // 4px to 10px
+                star.style.fontSize = `${size}px`;
+                star.style.top = `${Math.random() * 100}%`;
+                star.style.left = `${Math.random() * 100}%`;
+                star.style.opacity = (0.25 + Math.random() * 0.5).toFixed(2);
+                starsContainer.appendChild(star);
+            }
+        }
+
+        async function loadFloatingFormulas() { // load and display floating formulas from file
+            try {
+                // fetch floating formulas html
+                const response = await fetch('/floating-formulas-html');
+                const formulasHtml = await response.text();
+                
+                if (!formulasHtml.trim()) {
+                    console.log('No formulas returned from server');
+                    return;
+                }
+                
+                const container = document.getElementById('floatingFormulas');
+                container.innerHTML = formulasHtml;
+                
+                console.log('Floating formulas injected into dom');
+                
+                const formulas = container.querySelectorAll('.floating-formula');
+                formulas.forEach((formula, i) => {
+                    const top = formula.style.top;
+                    const left = formula.style.left;
+                    console.log(`Formula ${i + 1} positioned at ${top} top, ${left} left`); // log coordinates of each formula
+                });
+                
+                // typeset the newly added formulas
+                if (window.MathJax && window.MathJax.typesetPromise) {
+                    console.log('Running MathJax typeset');
+                    if (window.MathJax.typesetClear) {
+                        window.MathJax.typesetClear([container]);
+                    }
+                    await window.MathJax.typesetPromise([container]).then(() => {
+                        console.log('Floating formulas typeset successfully');
+                    }).catch(err => {
+                        console.error('MathJax typeset error:', err);
+                    });
+                } else {
+                    console.warn('MathJax not available');
+                }
+            } catch (error) {
+                console.error('Error loading floating formulas:', error);
+            }
+        }
+        
+        createStarField();
+        loadFloatingFormulas();
+    </script>
+</body>
+</html>

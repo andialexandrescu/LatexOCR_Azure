@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaTeX OCR - Box Selection</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js"></script>
+    <style>
+        body { background: #0b0f19; min-height: 100vh; padding: 40px 20px; position: relative; overflow-x: hidden; }
+        #stars { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; background-color: #0b0f19; }
+        .star { position: absolute; color: rgba(255, 255, 255, 0.85); }
+        #floatingFormulas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+        .floating-formula { position: absolute; color: rgba(200, 220, 255, 0.55); font-size: 18px; pointer-events: none; max-width: 300px; }
+        @keyframes float1 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        @keyframes float2 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-15px); }
+        }
+        @keyframes float3 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-25px); }
+        }
+        @keyframes float4 {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-18px); }
+        }
+        .main-container { max-width: 1400px; margin: 0 auto; position: relative; z-index: 2; }
+        .canvas-wrapper { border: 2px solid #fff; border-radius: 10px; overflow: auto; max-height: 70vh; background: rgba(255,255,255,0.95); display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        #canvas { display: block; cursor: crosshair; }
+        .box-legend { display: flex; gap: 20px; justify-content: center; margin-top: 10px; flex-wrap: wrap; font-size: 12px; color: white; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-auto { color: #0066ff; font-weight: bold; }
+        .legend-manual { color: #ff0000; font-weight: bold; }
+        .upload-section { border: 3px dashed rgba(255,255,255,0.6); border-radius: 15px; padding: 40px; cursor: pointer; transition: all 0.3s; background: rgba(255,255,255,0.1); color: white; }
+        .upload-section:hover { background: rgba(255,255,255,0.2); border-color: #fff; }
+        .upload-section.has-file { border-color: #4caf50; background: rgba(76,175,80,0.2); }
+    </style>
+</head>
+<body>
+    <div id="stars"></div>
+    <div id="floatingFormulas"></div>
+    
+    <div class="container main-container">
+        <h1 class="text-center mb-2 text-white">LaTeX OCR Formula Extractor, based on pix2tex</h1>
+        <p class="text-center text-white mb-4" style="opacity: 0.9;">Upload an image or pdf and draw boxes to encapsulate separate formulas in order to extract LaTeX code</p>
+        
+        <div class="alert alert-light mb-4" style="background: rgba(255,255,255,0.95); border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <h5>Usage</h5>
+            <ol class="mb-0">
+                <li>Upload an image (.png, .jpg) or a pdf file</li>
+                <li>Draw boxes around the mathematical formulas you want to extract</li>
+                <li>View your results on the page you will be redirected to</li>
+            </ol>
+        </div>
+        
+        <div class="upload-section text-center mb-3" id="uploadSection" onclick="document.getElementById('fileInput').click()">
+            <h3>Click to select file</h3>
+            <p class="text-white">.pdf, .png, .jpg (for pdf files, all pages will be processed)</p>
+            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg" class="d-none">
+        </div>
+        
+        <div class="alert" id="fileInfo" style="display: none; background: rgba(255,255,255,0.95); border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <strong>file name:</strong> <span id="fileName"></span><br>
+            <strong>size:</strong> <span id="fileSize"></span><br>
+            <strong>number of pages:</strong> <span id="totalPages">1</span><br>
+            <strong>boxes selected on current page:</strong> <span id="boxCount">0</span> | <strong>total of boxes selected on all pages:</strong> <span id="totalBoxCount">0</span>
+        </div>
+        
+        <div class="d-flex justify-content-center gap-2 mb-3" id="pageControls" style="display: none;">
+            <button class="btn btn-secondary" onclick="previousPage()" id="prevPageBtn" disabled>Previous page</button>
+            <span class="align-self-center fw-bold text-white">Page<span id="currentPageNum">1</span> of <span id="totalPagesDisplay">1</span></span>
+            <button class="btn btn-secondary" onclick="nextPage()" id="nextPageBtn" disabled>Next page</button>
+        </div>
+        
+        <div class="text-center my-3" id="canvasContainer" style="display: none;">
+            <div class="canvas-wrapper">
+                <canvas id="canvas"></canvas>
+            </div>
+            <div class="box-legend">
+                <div class="legend-item"><span class="legend-auto">■</span> <span>Auto detected boxes (blue)</span></div>
+                <div class="legend-item"><span class="legend-manual">■</span> <span>User drawn boxes (red)</span></div>
+            </div>
+        </div>
+        
+        <div class="d-flex justify-content-center gap-2 flex-wrap mb-3" id="controls" style="display: none;">
+            <button class="btn btn-info" onclick="autoDetectFormulas()" id="autoDetectBtn">
+                Auto detect formulas
+            </button>
+            <button class="btn btn-warning" onclick="clearLastBox()">Remove last box</button>
+            <button class="btn btn-danger" onclick="clearAllBoxes()">Clear all selected boxes</button>
+            <button class="btn btn-success" onclick="processBoxes()" id="processBtn" disabled>
+                Extract LaTeX
+            </button>
+        </div>
+        
+        <div class="card mb-3" id="boxList" style="display: none; background: rgba(255,255,255,0.95); border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <div class="card-body">
+                <h5 class="card-title">Selected boxes regions:</h5>
+                <div id="boxItems"></div>
+            </div>
+        </div>
+        
+        <div class="card mb-3" id="autoDetectPanel" style="display: none; background: rgba(200,230,255,0.95); border: 1px solid #0066ff; border-left: 4px solid #0066ff; box-shadow: 0 2px 10px rgba(0,102,255,0.2);">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="card-title mb-0">Auto detected boxes (<span id="autoDetectCount">0</span>)</h5>
+                    <div class="btn-group" role="group">
+                        <button class="btn btn-sm btn-success" onclick="acceptAllAutoDetected()" id="acceptAllBtn" style="display: none;">
+                            <i class="bi bi-check-all"></i> Accept all
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="rejectAllAutoDetected()" id="rejectAllBtn" style="display: none;">
+                            <i class="bi bi-x-circle"></i> Reject all
+                        </button>
+                    </div>
+                </div>
+                <div id="autoDetectItems"></div>
+            </div>
+        </div>
+        
+        <div class="text-center my-4" id="loading" style="display: none;">
+            <p class="mt-2 text-white">Processing your formulas...</p>
+        </div>
+        
+        <div class="alert" id="status" style="display: none; box-shadow: 0 2px 10px rgba(0,0,0,0.1);"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // region selection section
+        // bridges to the backend /api/extract-boxes
+        // it maintains allPagesData with canvas-space boxes for each page the user navigates on
+        // after extraction, results and page bitmaps are persisted in sessionStorage for the /results page to render
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let img = null;
+        let originalImageData = null; // stores the unannotated bitmap used for cropping
+        let boxes = []; // selected boxes for current page, in canvas pixel coordinates
+        let autoDetectedBoxes = []; // auto detected boxes for current page
+        let allPagesData = []; // stores all pages: {pageNum, imageData (dataurl), boxes: [], autoDetectedBoxes: []}
+        let currentPageIndex = 0;
+        let currentBox = null;
+        let isDrawing = false;
+        let startX, startY;
+        let boxIdCounter = 0;
+        
+        // handling input from the file chooser
+        // for images we create a single-page entry
+        // for pdfs we render each page via pdf.js into a dataurl object
+        document.getElementById('fileInput').addEventListener('change', handleFileUpload);
+        async function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatBytes(file.size);
+            document.getElementById('fileInfo').style.display = 'block';
+            document.getElementById('uploadSection').classList.add('has-file');
+            
+            if (file.type === 'application/pdf') {
+                await loadPDF(file);
+            } else {
+                await loadImage(file);
+            }
+        }
+        
+        async function loadImage(file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                img = new Image();
+                img.onload = function() {
+                    allPagesData = [{ // for images it is recommended to create a single page entry so the rest of the ui treats it like page 1
+                        pageNum: 1,
+                        imageData: event.target.result,
+                        boxes: [],
+                        autoDetectedBoxes: []
+                    }];
+                    currentPageIndex = 0;
+                    showPage(currentPageIndex);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function showPage(pageIndex) {
+            const pageData = allPagesData[pageIndex];
+            boxes = pageData.boxes;
+            autoDetectedBoxes = pageData.autoDetectedBoxes || [];
+            
+            img = new Image();
+            img.onload = function() {
+                setupCanvas();
+                updatePageNavigation();
+            };
+            img.src = pageData.imageData;
+        }
+        
+        async function loadPDF(file) {
+            // use pdf.js to render all pages into images that mirror pdf2image output
+            const arrayBuffer = await file.arrayBuffer();
+            if (!window.pdfjsLib) {
+                const script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+                document.head.appendChild(script);
+                
+                await new Promise(resolve => {
+                    script.onload = resolve;
+                });
+                
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            }
+            
+            const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+            const numPages = pdf.numPages;
+            
+            // update ui with total pages for navigation and selection summaries
+            document.getElementById('totalPages').textContent = numPages;
+            document.getElementById('totalPagesDisplay').textContent = numPages;
+            
+            // render all pages at a 2.0 scale so the canvas coordinates align with the image pixels sent to the backend
+            allPagesData = [];
+            for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                
+                const scale = 2.0;
+                const viewport = page.getViewport({scale: scale});
+                
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = viewport.width;
+                tempCanvas.height = viewport.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                await page.render({
+                    canvasContext: tempCtx,
+                    viewport: viewport
+                }).promise;
+                
+                allPagesData.push({
+                    pageNum: pageNum,
+                    imageData: tempCanvas.toDataURL(),
+                    boxes: [],
+                    autoDetectedBoxes: []
+                });
+            }
+            
+            currentPageIndex = 0;
+            showPage(currentPageIndex); // show first page as well as the navigation controls
+            if (numPages > 1) { // show page navigation if multiple pages were detected using flex
+                document.getElementById('pageControls').style.display = 'flex';
+            }
+        }
+        
+        function setupCanvas() {
+            // set canvas bitmap size to the current page image size so coordinates match the cropping
+            canvas.width = img.width;
+            canvas.height = img.height;
+            redrawCanvas(); // draw the current page image on the canvas
+            
+            // tempCanvas stores the original image data without overlays
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
+            originalImageData = tempCanvas.toDataURL('image/png');
+            
+            document.getElementById('canvasContainer').style.display = 'block'; // show canvas and controls once an image is ready
+            document.getElementById('controls').style.display = 'flex';
+            document.getElementById('boxList').style.display = 'block';
+            
+            canvas.addEventListener('mousedown', startDrawing); // the selected boxes are now identifiable in terms of coordinates
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+        }
+        
+        function redrawCanvas() { // draw all boxes for each current page so users can confirm selection
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+            
+            autoDetectedBoxes.forEach((box, index) => { // auto detected boxes in blue
+                ctx.strokeStyle = '#0066ff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.strokeRect(box.x, box.y, box.width, box.height);
+                ctx.setLineDash([]);
+                
+                ctx.fillStyle = '#0066ff';
+                ctx.font = 'bold 16px Arial';
+                ctx.fillText(`A${index + 1}`, box.x + 5, box.y + 20);
+            });
+            
+            boxes.forEach((box, index) => { // user drawn boxes in red
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(box.x, box.y, box.width, box.height);
+                
+                ctx.fillStyle = '#ff0000';
+                ctx.font = 'bold 20px Arial';
+                ctx.fillText(`#${index + 1}`, box.x + 5, box.y + 25);
+            });
+        }
+        
+        function startDrawing(e) {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+        }
+        
+        function draw(e) {
+            if (!isDrawing) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+            
+            redrawCanvas(); // redraw the canvas to update the live rectangle without permanently modifying the bitmap
+            
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+            ctx.setLineDash([]);
+        }
+        
+        function stopDrawing(e) {
+            if (!isDrawing) return;
+            isDrawing = false;
+            
+            const rect = canvas.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const endY = e.clientY - rect.top;
+            
+            const width = endX - startX;
+            const height = endY - startY;
+            
+            if (Math.abs(width) > 10 && Math.abs(height) > 10) { // only add box if geometry exceeds a small threshold to avoid accidental clicks
+                boxes.push({
+                    id: `box_${boxIdCounter++}`,
+                    x: Math.min(startX, endX),
+                    y: Math.min(startY, endY),
+                    width: Math.abs(width),
+                    height: Math.abs(height)
+                });
+                
+                // persist on the current page so results on multiple pages reflect this selection
+                allPagesData[currentPageIndex].boxes = boxes;
+                updateBoxList();
+                redrawCanvas();
+            }
+        }
+        
+        function updateBoxList() {
+            document.getElementById('boxCount').textContent = boxes.length;
+            const totalBoxes = allPagesData.reduce((sum, page) => sum + page.boxes.length, 0);
+            document.getElementById('totalBoxCount').textContent = totalBoxes;
+            document.getElementById('processBtn').disabled = totalBoxes === 0;
+            
+            const boxItems = document.getElementById('boxItems');
+            boxItems.innerHTML = '';
+            
+            boxes.forEach((box, index) => {
+                const item = document.createElement('div');
+                item.className = 'd-flex justify-content-between align-items-center p-2 mb-2 bg-light border-start border-primary border-3 rounded';
+                item.innerHTML = `
+                    <span>Box #${index + 1}: (${Math.round(box.x)}, ${Math.round(box.y)}) - ${Math.round(box.width)}×${Math.round(box.height)}px</span>
+                    <button class="btn btn-sm btn-danger" onclick="removeBox(${index})">Remove</button>
+                `;
+                boxItems.appendChild(item);
+            });
+        }
+        
+        function removeBox(index) {
+            boxes.splice(index, 1);
+            allPagesData[currentPageIndex].boxes = boxes;
+            updateBoxList();
+            redrawCanvas();
+        }
+        
+        function clearLastBox() {
+            if (boxes.length > 0) {
+                boxes.pop();
+                updateBoxList();
+                redrawCanvas();
+            }
+        }
+        
+        function clearAllBoxes() {
+            boxes = [];
+            allPagesData[currentPageIndex].boxes = [];
+            updateBoxList();
+            redrawCanvas();
+        }
+        
+        async function autoDetectFormulas() {
+            // save current page state before detection
+            allPagesData[currentPageIndex].boxes = boxes;
+            allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+            
+            const autoDetectBtn = document.getElementById('autoDetectBtn');
+            autoDetectBtn.disabled = true;
+            autoDetectBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Detecting...';
+            
+            try {
+                // call the backend auto detection endpoint for the current page
+                const response = await fetch('http://localhost:8000/api/auto-detect-formulas', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        imageData: allPagesData[currentPageIndex].imageData,
+                        pageNum: currentPageIndex + 1
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // store detected boxes for the current page
+                    autoDetectedBoxes = data.detectedBoxes;
+                    allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+                    
+                    showStatus(`Auto detected ${data.totalDetected} formula(s), review and accept/ reject below`, 'success');
+                    redrawCanvas();
+                    updateAutoDetectUI();
+                } else {
+                    showStatus(`Detection error: ${data.detail || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`Network error: ${error.message}`, 'error');
+            } finally {
+                autoDetectBtn.disabled = false;
+                autoDetectBtn.innerHTML = 'Auto detect formulas';
+            }
+        }
+        
+        function updateAutoDetectUI() {
+            const count = autoDetectedBoxes.length;
+            const panel = document.getElementById('autoDetectPanel');
+            const autoItems = document.getElementById('autoDetectItems');
+            
+            if (count === 0) {
+                panel.style.display = 'none';
+                return;
+            }
+            
+            document.getElementById('autoDetectCount').textContent = count;
+            document.getElementById('acceptAllBtn').style.display = 'inline-block';
+            document.getElementById('rejectAllBtn').style.display = 'inline-block';
+            panel.style.display = 'block';
+            autoItems.innerHTML = '';
+            
+            autoDetectedBoxes.forEach((box, index) => {
+                const item = document.createElement('div');
+                item.className = 'd-flex justify-content-between align-items-center p-2 mb-2 bg-white border-start border-info border-3 rounded';
+                item.innerHTML = `
+                    <span>Box A${index + 1}: (${Math.round(box.x)}, ${Math.round(box.y)}) - ${Math.round(box.width)}×${Math.round(box.height)}px (confidence: ${(box.confidence * 100).toFixed(0)}%)</span>
+                    <div>
+                        <button class="btn btn-sm btn-success me-1" onclick="acceptAutoDetectedBox(${index})" title="Accept this box">
+                            <i class="bi bi-check"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="rejectAutoDetectedBox(${index})" title="Reject this box">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                `;
+                autoItems.appendChild(item);
+            });
+        }
+        
+        function updateAutoDetectInfo() {
+            // show info about auto detected boxes
+            const totalAutoDetected = allPagesData.reduce((sum, page) => sum + (page.autoDetectedBoxes ? page.autoDetectedBoxes.length : 0), 0);
+            const totalManualBoxes = allPagesData.reduce((sum, page) => sum + page.boxes.length, 0);
+            
+            // optionally display in the box list (you can extend the updateBoxList function for this)
+            console.log(`Auto detected: ${totalAutoDetected}, Manual: ${totalManualBoxes}`);
+        }
+        
+        function acceptAutoDetectedBox(index) {
+            // convert auto detected box to a manual box by copying it to the boxes array
+            if (index >= 0 && index < autoDetectedBoxes.length) {
+                const autoBox = autoDetectedBoxes[index];
+                boxes.push({
+                    id: `manual_${boxIdCounter++}`,
+                    x: autoBox.x,
+                    y: autoBox.y,
+                    width: autoBox.width,
+                    height: autoBox.height
+                });
+                
+                autoDetectedBoxes.splice(index, 1);
+                
+                allPagesData[currentPageIndex].boxes = boxes;
+                allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+                updateBoxList();
+                updateAutoDetectUI();
+                redrawCanvas();
+                showStatus('Box accepted and added to selected boxes', 'success');
+            }
+        }
+        
+        function rejectAutoDetectedBox(index) {
+            // remove auto detected box completely
+            if (index >= 0 && index < autoDetectedBoxes.length) {
+                autoDetectedBoxes.splice(index, 1);
+                allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+                updateAutoDetectUI();
+                redrawCanvas();
+                showStatus('Auto detected box rejected', 'success');
+            }
+        }
+        
+        function acceptAllAutoDetected() {
+            // accept all auto detected boxes for the current page
+            const count = autoDetectedBoxes.length;
+            autoDetectedBoxes.forEach((autoBox) => {
+                boxes.push({
+                    id: `manual_${boxIdCounter++}`,
+                    x: autoBox.x,
+                    y: autoBox.y,
+                    width: autoBox.width,
+                    height: autoBox.height
+                });
+            });
+            
+            autoDetectedBoxes = []; // clear auto detected boxes completely
+            allPagesData[currentPageIndex].boxes = boxes;
+            allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+            updateBoxList();
+            updateAutoDetectUI();
+            redrawCanvas();
+            showStatus(`Accepted all ${count} boxes and added to selected boxes`, 'success');
+        }
+        
+        function rejectAllAutoDetected() {
+            // reject all auto detected boxes for the current page
+            const count = autoDetectedBoxes.length;
+            autoDetectedBoxes = [];
+            allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+            updateAutoDetectUI();
+            redrawCanvas();
+            showStatus(`Rejected all ${count} auto detected box(es)`, 'success');
+        }
+        
+        function previousPage() {
+            if (currentPageIndex > 0) {
+                allPagesData[currentPageIndex].boxes = boxes; // save current page boxes
+                allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+                currentPageIndex--;
+                showPage(currentPageIndex);
+            }
+        }
+        
+        function nextPage() {
+            if (currentPageIndex < allPagesData.length - 1) {
+                allPagesData[currentPageIndex].boxes = boxes; // save current page boxes
+                allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+                currentPageIndex++;
+                showPage(currentPageIndex);
+            }
+        }
+        
+        function updatePageNavigation() {
+            document.getElementById('currentPageNum').textContent = currentPageIndex + 1;
+            document.getElementById('prevPageBtn').disabled = currentPageIndex === 0;
+            document.getElementById('nextPageBtn').disabled = currentPageIndex === allPagesData.length - 1;
+            
+            const totalBoxes = allPagesData.reduce((sum, page) => sum + page.boxes.length, 0); // update total box count across all pages to enable the submit button only when needed
+            document.getElementById('totalBoxCount').textContent = totalBoxes;
+        }
+        
+        async function processBoxes() {
+            allPagesData[currentPageIndex].boxes = boxes; // save current page boxes before aggregating results across pages
+            allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
+            
+            // check if any boxes exist across all pages
+            // we expect at least one
+            const totalBoxes = allPagesData.reduce((sum, page) => sum + page.boxes.length, 0);
+            if (totalBoxes === 0) {
+                showStatus('Please draw at least one box on any page', 'error');
+                return;
+            }
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('processBtn').disabled = true;
+            
+            try {
+                const allResults = []; // used to process all pages with boxes by posting each page image aand box list to the backend
+                for (const pageData of allPagesData) {
+                    if (pageData.boxes.length > 0) {
+                        // the dataurl is decoded and cropped per selected box
+                        const response = await fetch('http://localhost:8000/api/extract-boxes', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                boxes: pageData.boxes,
+                                imageData: pageData.imageData
+                            })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (response.ok) {
+                            data.results.forEach(result => {
+                                result.page = pageData.pageNum; // add page number to each result so the results page can show page badges
+                            });
+                            allResults.push(...data.results);
+                        } else {
+                            showStatus(`Error on page ${pageData.pageNum}: ${data.detail || 'Unknown error'}`, 'error');
+                            return;
+                        }
+                    }
+                }
+                
+                const combinedData = {
+                    status: 'success',
+                    total_boxes: totalBoxes,
+                    results: allResults
+                };
+                
+                sessionStorage.setItem('extractionResults', JSON.stringify(combinedData));
+                sessionStorage.setItem('allPagesData', JSON.stringify(allPagesData));
+                window.location.href = '/results';
+                
+            } catch (error) {
+                showStatus(`Network error: ${error.message}`, 'error');
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('processBtn').disabled = false;
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `alert alert-${type === 'success' ? 'success' : 'danger'}`;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        function formatBytes(bytes, decimals = 2) { // used in file info panel
+            if (bytes === 0) return '0 bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['bytes', 'kb', 'mb', 'gb'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+        
+        // generate starfield using bootstrap icons
+        function createStarField() {
+            const starsContainer = document.getElementById('stars');
+            if (!starsContainer) return;
+            starsContainer.innerHTML = '';
+            const totalStars = 70;
+            for (let i = 0; i < totalStars; i++) {
+                const star = document.createElement('i');
+                star.className = 'bi bi-star-fill star';
+                const size = 4 + Math.random() * 6; // 4px to 10px
+                star.style.fontSize = `${size}px`;
+                star.style.top = `${Math.random() * 100}%`;
+                star.style.left = `${Math.random() * 100}%`;
+                star.style.opacity = (0.25 + Math.random() * 0.5).toFixed(2);
+                starsContainer.appendChild(star);
+            }
+        }
+
+        // load and display floating formulas from file
+        async function loadFloatingFormulas() {
+            try {
+                // fetch floating formulas html
+                const response = await fetch('/floating-formulas-html');
+                const formulasHtml = await response.text();
+                
+                if (!formulasHtml.trim()) {
+                    console.log('No formulas returned from server');
+                    return;
+                }
+                
+                const container = document.getElementById('floatingFormulas');
+                container.innerHTML = formulasHtml;
+                
+                console.log('Floating formulas injected into DOM');
+                
+                // log coordinates of each formula
+                const formulas = container.querySelectorAll('.floating-formula');
+                formulas.forEach((formula, i) => {
+                    const top = formula.style.top;
+                    const left = formula.style.left;
+                    console.log(`Formula ${i + 1} positioned at ${top} top, ${left} left`);
+                });
+                
+                if (window.MathJax && window.MathJax.typesetPromise) {
+                    console.log('Running MathJax typeset');
+                    if (window.MathJax.typesetClear) {
+                        window.MathJax.typesetClear([container]);
+                    }
+                    await window.MathJax.typesetPromise([container]).then(() => {
+                        console.log('Floating formulas typeset successfully');
+                    }).catch(err => {
+                        console.error('MathJax typeset error:', err);
+                    });
+                } else {
+                    console.warn('MathJax not available');
+                }
+            } catch (error) {
+                console.error('Error loading floating formulas:', error);
+            }
+        }
+        
+        createStarField();
+        loadFloatingFormulas();
+    </script>
+</body>
+</html>

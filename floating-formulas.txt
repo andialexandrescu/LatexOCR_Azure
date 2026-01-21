@@ -1,0 +1,31 @@
+\[f(x) = \sum_{n=0}^{\infty} \frac{f^{(n)}(a)}{n!} (x - a)^n\]
+
+\[x^n + y^n = z^n\]
+
+\[\frac{\left(x - x_0\right)^2}{a^2} + \frac{\left(y - y_0\right)^2}{b^2} + \frac{\left(z - z_0\right)^2}{c^2} = 1\]
+
+\[\varepsilon = \frac{\sqrt{a^2 + b^2}}{a}\]
+
+\[\int \sec(ax) dx = \frac{1}{a}\ln\left|\tan\left(\frac{ax}{2} + \frac{\pi}{4}\right)\right| + c\]
+
+\[e^{-at} \sin(\Omega t)u(t) \Leftrightarrow \frac{\Omega}{(s + a)^2 + \Omega^2}\]
+
+\[-\frac{\hbar^2}{2m}\frac{\partial^2 \psi(x,t)}{\partial x^2} + U(x)\psi(x,t) = i\hbar\frac{\partial \psi(x,t)}{\partial t}\]
+
+\[y = \frac{1}{\sqrt{2\pi}}e^{-\frac{z^2}{2}} = 0.3989e^{-5z^2}\]
+
+\[e = \lim_{n \to \infty}\left(1 + \frac{1}{n}\right)^n\]
+
+\[\Gamma(a) = \int_0^\infty s^{a-1} e^{-s} ds\]
+
+\[\lim_{x \to c} \frac{f(x)}{g(x)} = \lim_{x \to c} \frac{f'(x)}{g'(x)}\]
+
+\[\lim_{x \to -\infty} \tan^{-1}(x) = -\frac{\pi}{2}\]
+
+\[y(x,t) = A_n \cos(\omega_n t + \delta_n)\sin(k_n x)\]
+
+\[A = \frac{F_0}{\sqrt{m^2(\omega_0^2 - \omega^2)^2 + b^2\omega^2}}\]
+
+\[E_n = -R_H\left(\frac{1}{n^2}\right) = \frac{-2.178 \times 10^{-18}}{n^2}\text{ joule}\]
+
+\[h(n)x(n) \Leftrightarrow \frac{1}{2\pi j}\oint_C H(v)X(z/v)v^{-1} dv\]

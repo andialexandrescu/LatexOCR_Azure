@@ -12,6 +12,11 @@ from pydantic import BaseModel
 from PIL import Image, ImageOps
 import numpy as np
 from formula_detector import FormulaDetector
+from dotenv import load_dotenv
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.core.credentials import AzureKeyCredential
+from azure.ai.documentintelligence.models import DocumentAnalysisFeature, AnalyzeResult
+from azure.core.exceptions import HttpResponseError
 
 # this logger captures backend events (model load, pdf conversion, box processing)
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +46,7 @@ class BoundingBox(BaseModel):
 class BoxExtractionRequest(BaseModel):
     boxes: List[BoundingBox]
     imageData: str
+    engine: str = "local"  # local/ pix2tex or azure
 
 class AutoDetectRequest(BaseModel):
     imageData: str
@@ -68,6 +74,25 @@ except:
     MODEL_LOADED = False
     logger.warning("latex-ocr model failed to load")
 
+load_dotenv()
+AZURE_ENDPOINT = os.getenv("DOCUMENT_INTELLIGENCE_ENDPOINT")
+AZURE_KEY = os.getenv("DOCUMENT_INTELLIGENCE_SUBSCRIPTION_KEY")
+AZURE_CLIENT = None
+AZURE_READY = False
+
+if AZURE_ENDPOINT and AZURE_KEY:
+    try:
+        AZURE_CLIENT = DocumentIntelligenceClient(
+            endpoint=AZURE_ENDPOINT,
+            credential=AzureKeyCredential(AZURE_KEY)
+        )
+        AZURE_READY = True
+        logger.info("Azure Document Intelligence client initialized")
+    except Exception as e:
+        logger.warning(f"Azure Document Intelligence client failed to initialize: {e}")
+else:
+    logger.info("Azure Document Intelligence credentials not found")
+
 def convert_pdf_to_images(pdf_bytes: bytes) -> List[Image.Image]: # converts a binary pdf payload to a list of PIL.Image pages using pdf2image
     try:
         from pdf2image import convert_from_bytes
@@ -81,6 +106,49 @@ def convert_pdf_to_images(pdf_bytes: bytes) -> List[Image.Image]: # converts a b
     except Exception as e:
         logger.error(f"Error converting PDF to images: {e}")
         return []
+
+def azure_extract_formula_from_image(image: Image.Image) -> str:
+    if not AZURE_READY or not AZURE_CLIENT:
+        raise HTTPException(status_code=503, detail="Azure Document Intelligence not configured")
+
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    image_bytes = buf.getvalue()
+
+    poller = AZURE_CLIENT.begin_analyze_document(
+        model_id="prebuilt-read",
+        body=image_bytes,
+        features=[DocumentAnalysisFeature.FORMULAS]
+    )
+    result = poller.result()
+
+    formulas = []
+    for page in result.pages:
+        if hasattr(page, "formulas") and page.formulas:
+            for formula in page.formulas:
+                formulas.append(getattr(formula, "value", ""))
+
+    if formulas:
+        return formulas[0] # returns the first detected formula value
+
+    return result.content.strip() if hasattr(result, "content") else "" # return content text if no formulas
+
+def _pad_box(x: int, y: int, w: int, h: int, img_w: int, img_h: int, pad: int = 40) -> Tuple[int, int, int, int]:
+    x0 = max(0, x - pad)
+    y0 = max(0, y - pad)
+    x1 = min(img_w, x + w + pad)
+    y1 = min(img_h, y + h + pad)
+    return x0, y0, x1 - x0, y1 - y0
+
+def azure_analyze_image_bytes(img_bytes: bytes):
+    if not AZURE_READY or not AZURE_CLIENT:
+        raise HTTPException(status_code=503, detail="Azure Document Intelligence not configured")
+    poller = AZURE_CLIENT.begin_analyze_document(
+        model_id="prebuilt-read",
+        body=img_bytes,
+        features=[DocumentAnalysisFeature.FORMULAS]
+    )
+    return poller.result()
 
 @app.post("/api/simple-extract")
 async def simple_extract(file: UploadFile = File(...)): # simplified endpoint that uses FormulaDetector to automatically detect and extract formulas from pdf pages
@@ -230,10 +298,17 @@ async def auto_detect_formulas(request: AutoDetectRequest): # uses the FormulaDe
 async def extract_boxes(request: BoxExtractionRequest): # extracts latex from user defined bounding boxes on a page image
     # the frontend posts a json body with imageData (base64 dataurl) and boxes (canvas-space coordinates)
     # the backend decodes the base64 payload and crops per box
-    if not MODEL_LOADED:
+    engine = (request.engine or "local").lower()
+
+    if engine == "local" and not MODEL_LOADED:
         raise HTTPException(
             status_code=503,
             detail="LaTeX-OCR model not loaded"
+        )
+    if engine == "azure" and not AZURE_READY:
+        raise HTTPException(
+            status_code=503,
+            detail="Azure Document Intelligence not configured"
         )
     
     try:
@@ -242,7 +317,56 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
         image = Image.open(io.BytesIO(image_bytes))
         
         results = []
-        
+
+        if engine == "azure": # analyze each box with white padding to avoid nearby text
+            try:
+                for box in request.boxes:
+                    x = int(box.x)
+                    y = int(box.y)
+                    w = int(box.width)
+                    h = int(box.height)
+
+                    cropped = image.crop((x, y, x + w, y + h))
+                    cropped = ImageOps.expand(cropped, border=40, fill='white') # add white padding only
+
+                    buf = io.BytesIO()
+                    cropped.save(buf, format="PNG")
+                    result = azure_analyze_image_bytes(buf.getvalue())
+
+                    found = False
+                    for page in result.pages:
+                        if hasattr(page, "formulas") and page.formulas:
+                            for formula in page.formulas:
+                                formula_value = getattr(formula, "value", "")
+                                results.append({
+                                    "box_id": box.id,
+                                    "engine": engine,
+                                    "latex": formula_value,
+                                    "page": page.page_number
+                                })
+                                found = True
+                    if not found:
+                        # return content text if no formulas detected
+                        fallback_text = result.content.strip() if hasattr(result, "content") else ""
+                        results.append({
+                            "box_id": box.id,
+                            "engine": engine,
+                            "latex": fallback_text,
+                            "page": 1,
+                            "region": None
+                        })
+
+                return JSONResponse({
+                    "total_boxes": len(request.boxes),
+                    "engine": engine,
+                    "results": results,
+                    "formula_count": len(results)
+                })
+            except Exception as e:
+                logger.error(f"Azure extraction error: {e}")
+                raise HTTPException(status_code=500, detail=f"Azure extraction error: {str(e)}")
+
+        # local/ pix2tex path
         for box in request.boxes: # calculate pixel coordinates from client sent floats
             x = int(box.x)
             y = int(box.y)
@@ -250,28 +374,31 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
             h = int(box.height)
             
             try:
-                cropped = image.crop((x, y, x + w, y + h))
+                px, py, pw, ph = _pad_box(x, y, w, h, image.width, image.height, pad=40)
+                cropped = image.crop((px, py, px + pw, py + ph))
                 if cropped.mode != 'L':
                     cropped = cropped.convert('L')
                 cropped = ImageOps.expand(cropped, border=20, fill='white')
-                
                 latex_code = MODEL(cropped)
                 
                 results.append({
                     "box_id": box.id,
-                    "latex": latex_code.strip(),
-                    "region": {"x": x, "y": y, "width": w, "height": h}
+                    "engine": engine,
+                    "latex": latex_code.strip() if isinstance(latex_code, str) else latex_code,
+                    "region": {"x": px, "y": py, "width": pw, "height": ph}
                 })
             except Exception as e:
-                logger.error(f"error processing box {box.id}: {e}")
+                logger.error(f"Error processing box {box.id}: {e}")
                 results.append({
                     "box_id": box.id,
+                    "engine": engine,
                     "latex": "",
                     "region": {"x": x, "y": y, "width": w, "height": h}
                 })
         
         return JSONResponse({
             "total_boxes": len(request.boxes),
+            "engine": engine,
             "results": results
         })
         
@@ -318,8 +445,7 @@ async def floating_formulas_html(): # returns server rendered floating formulas 
             anim_num = (idx - 1) % 4 + 1
             duration = 20 + (idx - 1) * 2
             logger.info(f"floating formula {idx} positioned at {top}% top, {left}% left")
-            formulas_html += f"""<div class="floating-formula" style="top: {top}%; left: {left}%; animation: float{anim_num} {duration}s ease-in-out infinite;">\\[{formula_content}\\]</div>
-"""
+            formulas_html += f"""<div class="floating-formula" style="top: {top}%; left: {left}%; animation: float{anim_num} {duration}s ease-in-out infinite;">\\[{formula_content}\\]</div>"""
         
         logger.info(f"Generated {len(formula_matches)} floating formulas")
         return formulas_html

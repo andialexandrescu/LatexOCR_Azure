@@ -507,7 +507,8 @@
                     x: autoBox.x,
                     y: autoBox.y,
                     width: autoBox.width,
-                    height: autoBox.height
+                    height: autoBox.height,
+                    preview: autoBox.preview  // preserve preview for results page
                 });
                 
                 autoDetectedBoxes.splice(index, 1);
@@ -541,7 +542,8 @@
                     x: autoBox.x,
                     y: autoBox.y,
                     width: autoBox.width,
-                    height: autoBox.height
+                    height: autoBox.height,
+                    preview: autoBox.preview  // preserve preview for results page
                 });
             });
             
@@ -596,6 +598,27 @@
             return selected ? selected.value : 'local';
         }
         
+        async function generateBoxPreview(imageDataUrl, box) {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                
+                img.onload = function() {
+                    canvas.width = box.width;
+                    canvas.height = box.height;
+                    ctx.drawImage(img, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
+                    resolve(canvas.toDataURL('image/png'));
+                };
+                
+                img.onerror = function() {
+                    resolve(null);
+                };
+                
+                img.src = imageDataUrl;
+            });
+        }
+        
         async function processBoxes() {
             allPagesData[currentPageIndex].boxes = boxes; // save current page boxes before aggregating results across pages
             allPagesData[currentPageIndex].autoDetectedBoxes = autoDetectedBoxes;
@@ -614,6 +637,12 @@
                 const allResults = []; // used to process all pages with boxes by posting each page image aand box list to the backend
                 for (const pageData of allPagesData) {
                     if (pageData.boxes.length > 0) {
+                        for (const box of pageData.boxes) {
+                            if (!box.preview) {
+                                box.preview = await generateBoxPreview(pageData.imageData, box); // generate previews for boxes that don't have one
+                            }
+                        }
+                        
                         // the dataurl is decoded and cropped per selected box
                         const response = await fetch('http://localhost:8000/api/extract-boxes', {
                             method: 'POST',
@@ -630,8 +659,12 @@
                         const data = await response.json();
                         
                         if (response.ok) {
-                            data.results.forEach(result => {
+                            data.results.forEach((result, idx) => {
                                 result.page = pageData.pageNum; // add page number to each result so the results page can show page badges
+                                const box = pageData.boxes[idx];
+                                if (box && box.preview) {
+                                    result.preview = box.preview; // preserve the preview from auto detected boxes
+                                }
                             });
                             allResults.push(...data.results);
                         } else {

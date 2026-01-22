@@ -133,13 +133,6 @@ def azure_extract_formula_from_image(image: Image.Image) -> str:
 
     return result.content.strip() if hasattr(result, "content") else "" # return content text if no formulas
 
-def _pad_box(x: int, y: int, w: int, h: int, img_w: int, img_h: int, pad: int = 40) -> Tuple[int, int, int, int]:
-    x0 = max(0, x - pad)
-    y0 = max(0, y - pad)
-    x1 = min(img_w, x + w + pad)
-    y1 = min(img_h, y + h + pad)
-    return x0, y0, x1 - x0, y1 - y0
-
 def azure_analyze_image_bytes(img_bytes: bytes):
     if not AZURE_READY or not AZURE_CLIENT:
         raise HTTPException(status_code=503, detail="Azure Document Intelligence not configured")
@@ -272,6 +265,16 @@ async def auto_detect_formulas(request: AutoDetectRequest): # uses the FormulaDe
         
         detected_boxes = []
         for idx, (x, y, w, h) in enumerate(formulas):
+            try:
+                crop = image.crop((x, y, x + w, y + h))
+                buf = io.BytesIO()
+                crop.save(buf, format="PNG")
+                cropped_bytes = buf.getvalue()
+                processed_b64 = "data:image/png;base64," + base64.b64encode(cropped_bytes).decode()
+            except Exception as crop_err:
+                logger.warning(f"Preview generation failed for auto box {idx} on page {request.pageNum}: {crop_err}")
+                processed_b64 = None
+
             detected_boxes.append({
                 "id": f"auto_box_{request.pageNum}_{idx}",
                 "x": float(x),
@@ -279,7 +282,8 @@ async def auto_detect_formulas(request: AutoDetectRequest): # uses the FormulaDe
                 "width": float(w),
                 "height": float(h),
                 "isAutoDetected": True,
-                "confidence": 0.85 # confidence score from detection
+                "confidence": 0.85, # confidence score from detection
+                "preview": processed_b64  # raw crop for preview, won't be overwritten
             })
         
         logger.info(f"Auto detected {len(detected_boxes)} formula regions on page {request.pageNum}")
@@ -327,11 +331,16 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
                     h = int(box.height)
 
                     cropped = image.crop((x, y, x + w, y + h))
-                    cropped = ImageOps.expand(cropped, border=40, fill='white') # add white padding only
+                    padding_azure=40
+                    cropped = ImageOps.expand(cropped, border=padding_azure, fill='white') # add white padding only
 
                     buf = io.BytesIO()
                     cropped.save(buf, format="PNG")
-                    result = azure_analyze_image_bytes(buf.getvalue())
+                    cropped_bytes = buf.getvalue()
+                    processed_b64 = "data:image/png;base64," + base64.b64encode(cropped_bytes).decode()
+                    result = azure_analyze_image_bytes(cropped_bytes)
+
+                    page_num = result.pages[0].page_number if result.pages else 1
 
                     found = False
                     for page in result.pages:
@@ -342,7 +351,10 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
                                     "box_id": box.id,
                                     "engine": engine,
                                     "latex": formula_value,
-                                    "page": page.page_number
+                                    "page": page.page_number,
+                                    "region": {"x": x, "y": y, "width": w, "height": h},
+                                    "processed_image": processed_b64,
+                                    "padding": padding_azure
                                 })
                                 found = True
                     if not found:
@@ -352,8 +364,10 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
                             "box_id": box.id,
                             "engine": engine,
                             "latex": fallback_text,
-                            "page": 1,
-                            "region": None
+                            "page": page_num,
+                            "region": {"x": x, "y": y, "width": w, "height": h},
+                            "processed_image": processed_b64,
+                            "padding": padding_azure
                         })
 
                 return JSONResponse({
@@ -365,42 +379,46 @@ async def extract_boxes(request: BoxExtractionRequest): # extracts latex from us
             except Exception as e:
                 logger.error(f"Azure extraction error: {e}")
                 raise HTTPException(status_code=500, detail=f"Azure extraction error: {str(e)}")
-
-        # local/ pix2tex path
-        for box in request.boxes: # calculate pixel coordinates from client sent floats
-            x = int(box.x)
-            y = int(box.y)
-            w = int(box.width)
-            h = int(box.height)
-            
-            try:
-                px, py, pw, ph = _pad_box(x, y, w, h, image.width, image.height, pad=40)
-                cropped = image.crop((px, py, px + pw, py + ph))
-                if cropped.mode != 'L':
-                    cropped = cropped.convert('L')
-                cropped = ImageOps.expand(cropped, border=20, fill='white')
-                latex_code = MODEL(cropped)
+        if engine == "local": # local/ pix2tex path
+            for box in request.boxes: # calculate pixel coordinates from client sent floats
+                x = int(box.x)
+                y = int(box.y)
+                w = int(box.width)
+                h = int(box.height)
                 
-                results.append({
-                    "box_id": box.id,
-                    "engine": engine,
-                    "latex": latex_code.strip() if isinstance(latex_code, str) else latex_code,
-                    "region": {"x": px, "y": py, "width": pw, "height": ph}
-                })
-            except Exception as e:
-                logger.error(f"Error processing box {box.id}: {e}")
-                results.append({
-                    "box_id": box.id,
-                    "engine": engine,
-                    "latex": "",
-                    "region": {"x": x, "y": y, "width": w, "height": h}
-                })
-        
-        return JSONResponse({
-            "total_boxes": len(request.boxes),
-            "engine": engine,
-            "results": results
-        })
+                try:
+                    cropped = image.crop((x, y, x + w, y + h))
+                    if cropped.mode != 'L':
+                        cropped = cropped.convert('L')
+
+                    buf = io.BytesIO()
+                    cropped.save(buf, format="PNG")
+                    processed_b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+                    latex_code = MODEL(cropped)
+                    
+                    results.append({
+                        "box_id": box.id,
+                        "engine": engine,
+                        "latex": latex_code.strip() if isinstance(latex_code, str) else latex_code,
+                        "region": {"x": x, "y": y, "width": w, "height": h},
+                        "processed_image": processed_b64,
+                        "padding": 0
+                    })
+                except Exception as e:
+                    logger.error(f"Error processing box {box.id}: {e}")
+                    results.append({
+                        "box_id": box.id,
+                        "engine": engine,
+                        "latex": "",
+                        "region": {"x": x, "y": y, "width": w, "height": h}
+                    })
+            
+            return JSONResponse({
+                "total_boxes": len(request.boxes),
+                "engine": engine,
+                "results": results
+            })
         
     except Exception as e:
         logger.error(f"Error in box extraction: {e}")

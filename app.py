@@ -104,7 +104,7 @@ def convert_pdf_to_images(pdf_bytes: bytes) -> List[Image.Image]: # converts a b
         logger.error("pdf2image not installed")
         return []
     except Exception as e:
-        logger.error(f"Error converting PDF to images: {e}")
+        logger.error(f"Error converting pdf to images: {e}")
         return []
 
 def azure_extract_formula_from_image(image: Image.Image) -> str:

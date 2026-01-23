@@ -1,0 +1,8 @@
+__pycache__
+.git
+.gitignore
+.env
+*.md
+*.pdf
+*.ipynb
+debug_detections.py

@@ -423,7 +423,7 @@
             
             try {
                 // call the backend auto detection endpoint for the current page
-                const response = await fetch('http://localhost:8000/api/auto-detect-formulas', {
+                const response = await fetch('/api/auto-detect-formulas', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -644,7 +644,7 @@
                         }
                         
                         // the dataurl is decoded and cropped per selected box
-                        const response = await fetch('http://localhost:8000/api/extract-boxes', {
+                        const response = await fetch('/api/extract-boxes', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'

@@ -46,3 +46,18 @@ DOCUMENT_INTELLIGENCE_ENDPOINT = ...
 DOCUMENT_INTELLIGENCE_SUBSCRIPTION_KEY = ...
 
 Then enable external ingress on port 8000
+
+Updating docker image + container app
+```bash
+ $TAG="2026-01-23-1"
+docker build -t andialexandrescu/latexocr:$TAG .
+
+docker push andialexandrescu/latexocr:$TAG
+
+$RESOURCE_GROUP="latex-ocr"
+$CONTAINER_APP_NAME="latex-ocr-container-app"
+az containerapp update `
+  --name $CONTAINER_APP_NAME `
+  --resource-group $RESOURCE_GROUP `
+  --image "andialexandrescu/latexocr:$TAG"
+```

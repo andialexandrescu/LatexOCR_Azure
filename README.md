@@ -1,5 +1,8 @@
 # LatexOCR_Azure
 
+## Demo video
+https://youtu.be/MDS35h-oiCY
+
 ## Installation
 
 ```bash
